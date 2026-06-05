@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-shot publisher for the `skill` repo.
+# One-shot publisher for the `SKILL-SKILL` repo.
 # Run: ./setup.sh
 
 set -euo pipefail
@@ -66,7 +66,7 @@ fi
 if [ -z "$(git log --oneline 2>/dev/null)" ]; then
   echo "→ Creating initial commit..."
   git add .
-  git commit -q -m "feat: initial release of skill bundle
+  git commit -q -m "feat: initial release of SKILL SKILL
 
 - 6 atomic skills covering the publish-to-GitHub pipeline
 - 1 orchestrator skill (publish-skill-bundle)
