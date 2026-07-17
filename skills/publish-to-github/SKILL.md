@@ -1,6 +1,6 @@
 ---
 name: publish-to-github
-description: "Use this skill when the user is ready to push their local AI skill or rule repository to GitHub for the first time. This includes running git init and the initial commit, creating the GitHub repository via the gh CLI or manual browser steps, setting the repository description and Topics tags, and confirming the push succeeded. Trigger when the user says 'upload to GitHub', 'push this to GitHub', 'create my repo on GitHub', 'how do I publish this', 'make this live', or 'I have all the files ready, now what'. Also trigger when the user has a complete local folder with all files and just needs the final publishing step. Do NOT trigger if any files still need to be written or edited before publishing — all content must be finalized first. Do NOT trigger for submitting the repo to awesome-lists after publishing (that is submit-to-directories)."
+description: "Use this skill when the user is ready to push their local AI skill or rule repository to GitHub for the first time. This includes running git init and the initial commit, creating the GitHub repository via the gh CLI or manual browser steps, setting the repository description and Topics tags, and confirming the push succeeded. Trigger when the user says 'upload to GitHub', 'push this to GitHub', 'create my repo on GitHub', 'how do I publish this', 'make this live', or 'I have all the files ready, now what'. Also trigger when the user has a complete local folder with all files and just needs the final publishing step. Also covers environments with no usable git at all — sandboxed agents, browser-only sessions — via the GitHub API with a fine-grained PAT, browser drag-and-drop upload, agent-driven web editor commits, and a repair mode for repos that already exist. Do NOT trigger if any files still need to be written or edited before publishing — all content must be finalized first. Do NOT trigger for submitting the repo to awesome-lists after publishing (that is submit-to-directories)."
 license: MIT
 ---
 
@@ -15,7 +15,7 @@ gh repo create {username}/{repo} --public --description "{tagline}" --source=. -
 
 Then set Topics on the repo page (Phase 3). Done.
 
-If `gh` is not installed, follow the manual path in Phase 2.
+If `gh` is not installed, follow the manual path in Phase 2. No usable git at all (sandboxed agent, browser-only session)? Use Phase 2b.
 
 ---
 
@@ -108,6 +108,60 @@ git push -u origin main
 
 ---
 
+## Phase 2b: No-git fallback
+
+Use this phase when the environment has no usable git at all — no CLI, no credentials, or a sandboxed agent (browser-only sessions, Claude Cowork and similar). Three paths, in order of preference.
+
+### Path A — GitHub API with a fine-grained PAT (standard, atomic)
+
+The programmatic equivalent of `git push`, and what `gh` does under the hood. One-time setup: create a fine-grained personal access token scoped to the target repo only, permission "Contents: Read and write" (add "Administration" if the repo must be created too). Store it in an environment variable or keychain. Never paste the token into a chat or agent conversation — agents should read it from the environment, not from the transcript.
+
+Create the repo:
+
+```bash
+curl -s -X POST https://api.github.com/user/repos \
+  -H "Authorization: Bearer $GITHUB_TOKEN" \
+  -d '{"name":"{repo-name}","description":"{tagline}","auto_init":false}'
+```
+
+Then commit all files atomically with the Git Data API — blob → tree → commit → ref:
+
+1. `POST /repos/{u}/{r}/git/blobs` for each file (base64 content)
+2. `POST /repos/{u}/{r}/git/trees` listing every path with its blob sha
+3. `POST /repos/{u}/{r}/git/commits` with the tree sha and the Phase 1 message format
+4. `POST /repos/{u}/{r}/git/refs` pointing `refs/heads/main` at the new commit
+
+Result: one clean initial commit, identical to the git path. Any HTTP client or octokit works.
+
+### Path B — Browser drag-and-drop (human, zero tooling, atomic)
+
+1. Create the repo at https://github.com/new — do NOT initialize with README
+2. On the empty-repo page, click "uploading an existing file"
+3. Drag the entire local folder into the drop zone — directory structure is preserved, and every file lands in a single commit
+4. Replace the default commit message with the Phase 1 format before committing
+
+Two minutes, no tools, clean history. Prefer this over the web file editor whenever a human is at the keyboard.
+
+### Path C — Agent-driven web editor (last resort)
+
+For agents that hold only a logged-in browser session: create each file via `github.com/{u}/{r}/new/main?filename={path}` and the web editor (the `filename` query parameter pre-fills the path and creates directories). Accept the cost — one commit per file, no atomicity. Three rules learned the hard way:
+
+- Inject content as a single transaction (`document.execCommand('insertText')` after select-all), never keystroke-by-keystroke typing — the editor's markdown auto-indent silently corrupts lists and YAML front matter
+- Set the commit message in the dialog via the native value setter plus a dispatched `input` event, or the framework ignores the change
+- Verify through the contents API by comparing SHA-256 of the decoded content, not raw.githubusercontent.com — the raw CDN caches for ~5 minutes and will show a stale file
+
+---
+
+## Repair mode: the repo already exists
+
+When fixing a repo that was published wrong or half-published, do not delete and recreate it — stars, clones, and inbound links break. Update in place:
+
+- With a token: `PUT /repos/{u}/{r}/contents/{path}` per file, passing the current file's `sha` to overwrite
+- Browser only: the web editor per file (Path C rules apply)
+- History from the broken attempt cannot be rewritten from the browser; accept it, and make the fix commits tell a clear story with proper messages
+
+---
+
 ## Phase 3: Configure GitHub metadata
 
 Do this on the repo page immediately after pushing. Topics directly affect search ranking.
@@ -167,3 +221,9 @@ GitHub defaults new repos to `main`. If the local branch is `master`, run `git b
 
 **Not reviewing `git status` before the first commit.**
 A stray `git add .` can accidentally stage secrets, build artifacts, or system files. Always check `git status` output before committing.
+
+**Pasting an access token into a chat or agent conversation.**
+Tokens belong in environment variables or a keychain. An agent that needs one should read `$GITHUB_TOKEN` from the environment; a token that has passed through a conversation transcript should be treated as leaked and revoked.
+
+**Trusting raw.githubusercontent.com right after a commit.**
+The raw CDN caches aggressively (~5 minutes). Verify pushes through the contents API or the repo page, or you will "confirm" a stale version.
